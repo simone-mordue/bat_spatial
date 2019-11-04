@@ -1,0 +1,139 @@
+install.packages("igraph")
+devtools::install_github("dkahle/ggmap")
+devtools::install_github("hadley/ggplot2")
+devtools::install_github("igraph/rigraph")
+library(reshape2)
+library(igraph)
+library(ggmap)
+library(sp)
+
+#setwd("C:/Users/a6915409/Dropbox/Network bats")
+setwd("~/Dropbox/Network bats")
+
+
+rawd <- read.csv("./Roost data ALL.csv", as.is=TRUE, na.strings="")
+rawd.m <- melt(rawd, id.vars="X", variable.name="roost", value.name="bat.id")
+rawd.m$count <- 1
+rawd.m <- na.omit(rawd.m)
+
+
+
+bats1 <- as.matrix(as.data.frame.matrix(xtabs(count~bat.id+roost, data=rawd.m)))
+batroosts.g <- graph.data.frame(data.frame(rawd.m[,2:3], weight=1), directed=FALSE, vertices=data.frame(name=c(rownames(bats1), colnames(bats1)), type=c(rep("B", NROW(bats1)), rep("R", NCOL(bats1))))  )
+batroosts.g <- simplify(batroosts.g, edge.attr.comb="sum")
+
+#find out vertex names of igraph
+
+V(batroosts.g)$name
+
+plot(batroosts.g)
+
+#Calualate similartity index and save as data frame
+df<-as.data.frame(similarity.jaccard(batroosts.g, vids = V(batroosts.g), mode = c("all", "out", "in", "total"),
+           loops = FALSE))
+
+#rename rownames and column names for df
+row.names(df)<-V(batroosts.g)$name
+colnames(df)<-V(batroosts.g)$name
+
+#create network
+
+
+#write df out to file
+write.csv(df, "./jaccardsimilarityofroosts.csv")
+
+
+#to change layout to spatial position
+
+coords<-read.csv("./roostlocs.csv")
+coords1<-as.matrix(coords)
+##batroosts.g$layout <- coords1
+
+
+map<-get_map(location="Wallington, Nothumberland", zoom=13)
+ggmap(map, xlim=range(batroosts,g$layout[,1]), ylim=range(batroosts.g$layout[,2]))
+ggmap(map)
+
+
+plot(x, add=TRUE)
+library(Cairo)
+Cairo(file="Cairo_PNG_501_dpi.png", 
+      type="png",
+      units="in", 
+      width=20, 
+      height=10, 
+      pointsize=12, 
+      dpi=500)
+
+#batroosts.g$layout <- layout.fruchterman.reingold(batroosts.g)
+#batroosts.g$layout <- layout.bipartite(batroosts.g, types=V(batroosts.g)$type=="B")[,2:1]
+plot(batroosts.g, edge.width=E(batroosts.g)$weight, vertex.label.cex=0.75, vertex.color=c("royalblue", "green2")[as.factor(V(batroosts.g)$type)])
+
+Cairo(width=640, height=480)
+
+
+legend("topright", bty="n", pch=21, pt.cex=2, pt.bg=c("royalblue", "green2"), legend=c("bats", "roosts"))
+roost.adj <- t(bats1) %*% bats1
+bats.adj <- bats1 %*% t(bats1)
+
+#perhaps should build network with:
+roost.adj <-  t(ifelse(bats1>0, 1, 0)) %*% ifelse(bats1>0, 1, 0)
+#bats.adj <- ifelse(bats>0, 1, 0) %*% t(ifelse(bats>0, 1, 0))
+  #makes more intuitive sense: bat H1607 shares 1 roost with H1608; roosts B and C share 4 bats
+  #howver, obscures weight of interaction; i.e. number of times they share a roost
+
+#plot roosts according to bats in common
+roost.g<- graph.adjacency(roost.adj, mode="undirected", weighted=TRUE, diag=FALSE)
+roost.g$layout <-coords1
+#roost.g$layout <- layout.fruchterman.reingold(roost.g, weights=E(roost.g)$weight)
+plot(roost.g)
+
+#remove roosts EGI which have few bats in common
+roost2.g <- induced.subgraph(roost.g, vids=V(roost.g)[!(V(roost.g)$name %in% c("E", "G", "I"))])
+roost2.g$layout <- layout.fruchterman.reingold(roost2.g, weights=E(roost2.g)$weight)
+plot(roost2.g, edge.width=E(roost2.g)$weight/2)
+
+
+#plot bats according to the roosts they use
+bats.g<- graph.adjacency(bats.adj, mode="undirected", weighted=TRUE, diag=FALSE)
+bats.g$layout <- layout.fruchterman.reingold(bats.g, weights=E(bats.g)$weight)
+plot(bats.g, vertex.label.cex=0.75, bg="#111111")
+
+#remove bats that were caught at unusual roosts
+V(bats.g)$memb <- clusters(bats.g)$membership
+bats2.g <- induced.subgraph(bats.g, vids=V(bats.g)[V(bats.g)$memb==1])
+bats2.g$layout <- layout.fruchterman.reingold(bats2.g, weights=E(bats2.g)$weight)
+plot(bats2.g, vertex.label.cex=0.75)
+
+
+
+#interesting centrality of some bats: H1670, H1680, H1682, H1608
+bats[rownames(bats) %in% c("H1670", "H1680", "H1682", "H1608"),] #found in both B and C
+
+colscale <- c("orangered", "deepskyblue", "darkolivegreen1", "orchid1")
+
+bats.comm <- fastgreedy.community(bats2.g, weights=E(bats2.g)$weight)
+plot(bats2.g, vertex.color=colscale[membership(bats.comm)])
+
+roost.comm <- fastgreedy.community(roost2.g, weights=E(roost2.g)$weight)
+plot(roost2.g, vertex.color=colscale[membership(roost.comm)], edge.width=E(roost2.g)$weight/2)
+
+
+#cumulative number of roosts found
+library(lubridate)
+rawd.m$date <- dmy(rawd.m$X)
+mindate <- aggregate(date~roost, data=rawd.m, FUN=min)
+mindate$date <- round(mindate$date, "days")
+tseries <- data.frame(date=c(ymd("2013-07-01") + c(0:10)*days(7), ymd("2014-07-14")+c(0:10)*days(7)), week=c((0:10)+1, (0:10)+1))
+tseries$contweek <- 1:NROW(tseries)
+tseries$year <- year(tseries$date)
+tseries$count <- sapply(tseries$date, FUN=function(x,md) {length(md) - sum(x<=md)}, md=mindate$date )
+plot(tseries$contweek, tseries$count, pch=16, type="o", xpd=FALSE, col=ifelse(tseries$year==2013, colscale[1], colscale[2]))
+
+#different bat communities? Or different years?
+rec <- read.csv("R:/pc/projects/bats simone/bat records.csv", as.is=TRUE)
+rec$date2 <- dmy(rec$Date)
+rec$year <- year(rec$date2)
+memb <- data.frame (bat.id=V(bats2.g)$name, m=membership(bats.comm))
+rec <- merge(rec, memb, by.x="Bat.ring", by.y="bat.id", all.y=TRUE)
+table(rec$year, rec$m)
